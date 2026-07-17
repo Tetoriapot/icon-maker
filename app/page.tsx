@@ -573,11 +573,7 @@ export default function Home() {
         {!imageInfo ? (
           <section className="landing-section">
             <div className="hero-copy">
-              <p className="eyebrow">30秒で、ぴったりの一枚。</p>
-              <h1>
-                好きな画像を、
-                <span>あなたらしいアイコンに。</span>
-              </h1>
+              <h1 className="eyebrow">30秒で、ぴったりの一枚。</h1>
               <p className="hero-description">
                 切り抜いて、整えて、すぐ保存。
                 <br />

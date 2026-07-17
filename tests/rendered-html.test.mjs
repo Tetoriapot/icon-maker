@@ -45,6 +45,11 @@ test("ships the complete local-only editor surface", async () => {
   ]);
 
   assert.match(page, /image\/png,image\/jpeg,image\/webp/);
+  assert.match(
+    page,
+    /<h1 className="eyebrow">30秒で、ぴったりの一枚。<\/h1>/,
+  );
+  assert.doesNotMatch(page, /好きな画像を、/);
   assert.match(page, /canvas\.toBlob/);
   assert.match(page, /Ctrl\+Z/);
   assert.match(page, /PRESET_SIZES = \[128, 256, 512, 1024\]/);
