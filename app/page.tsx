@@ -12,8 +12,10 @@ import {
 } from "react";
 
 type CropShape = "circle" | "square";
-type BackgroundMode = "transparent" | "white" | "black" | "custom";
+type BackgroundMode = "transparent" | "white" | "black" | "custom" | "image";
+type BorderMode = "color" | "image";
 type OutputFormat = "png" | "jpg" | "webp";
+type LayerKind = "frame" | "background";
 
 type EditorState = {
   zoom: number;
@@ -22,9 +24,12 @@ type EditorState = {
   shape: CropShape;
   background: BackgroundMode;
   backgroundColor: string;
+  backgroundAssetId: number | null;
   borderEnabled: boolean;
+  borderMode: BorderMode;
   borderColor: string;
   borderWidth: number;
+  frameAssetId: number | null;
   size: number;
   format: OutputFormat;
   quality: number;
@@ -34,6 +39,12 @@ type ImageInfo = {
   name: string;
   width: number;
   height: number;
+};
+
+type LayerAsset = ImageInfo & {
+  id: number;
+  image: HTMLImageElement;
+  url: string;
 };
 
 type Gesture = {
@@ -57,9 +68,12 @@ const INITIAL_EDITOR: EditorState = {
   shape: "circle",
   background: "transparent",
   backgroundColor: "#8b5cf6",
+  backgroundAssetId: null,
   borderEnabled: true,
+  borderMode: "color",
   borderColor: "#ffffff",
   borderWidth: 12,
+  frameAssetId: null,
   size: 512,
   format: "png",
   quality: 0.92,
@@ -84,11 +98,117 @@ function CheckerIcon() {
   );
 }
 
+type LayerUploadProps = {
+  asset?: LayerAsset;
+  active: boolean;
+  disabled?: boolean;
+  label: string;
+  help: string;
+  onOpen: () => void;
+  onDrop: (event: ReactDragEvent<HTMLDivElement>) => void;
+  onDragEnter: (event: ReactDragEvent<HTMLDivElement>) => void;
+  onDragLeave: () => void;
+  onRemove: () => void;
+};
+
+function LayerUpload({
+  asset,
+  active,
+  disabled = false,
+  label,
+  help,
+  onOpen,
+  onDrop,
+  onDragEnter,
+  onDragLeave,
+  onRemove,
+}: LayerUploadProps) {
+  return (
+    <div className="layer-upload-wrap">
+      <div
+        className={`layer-upload ${active ? "is-active" : ""} ${disabled ? "is-disabled" : ""}`}
+        role="button"
+        tabIndex={disabled ? -1 : 0}
+        aria-disabled={disabled}
+        aria-label={asset ? `${label}を差し替え` : `${label}を選択またはドロップ`}
+        onClick={() => {
+          if (!disabled) onOpen();
+        }}
+        onKeyDown={(event) => {
+          if (!disabled && (event.key === "Enter" || event.key === " ")) {
+            event.preventDefault();
+            onOpen();
+          }
+        }}
+        onDragEnter={(event) => {
+          if (!disabled) onDragEnter(event);
+        }}
+        onDragOver={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!disabled) event.dataTransfer.dropEffect = "copy";
+        }}
+        onDragLeave={() => {
+          if (!disabled) onDragLeave();
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!disabled) onDrop(event);
+        }}
+      >
+        {asset ? (
+          <>
+            <span className="layer-upload-thumb checkerboard" aria-hidden="true">
+              <img src={asset.url} alt="" />
+            </span>
+            <span className="layer-upload-copy">
+              <strong title={asset.name}>{asset.name}</strong>
+              <small>
+                {asset.width} × {asset.height}px
+              </small>
+            </span>
+            <span className="layer-upload-action">差し替え</span>
+          </>
+        ) : (
+          <>
+            <span className="layer-upload-mark" aria-hidden="true">＋</span>
+            <span className="layer-upload-copy">
+              <strong>{label}をドロップ</strong>
+              <small>{help}</small>
+            </span>
+            <span className="layer-upload-action">選ぶ</span>
+          </>
+        )}
+      </div>
+      {asset && (
+        <button
+          className="layer-remove-button"
+          type="button"
+          onClick={onRemove}
+          disabled={disabled}
+        >
+          画像を解除
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
+  const frameInputRef = useRef<HTMLInputElement>(null);
+  const backgroundInputRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
+  const layerAssetsRef = useRef(new Map<number, LayerAsset>());
+  const nextLayerAssetIdRef = useRef(1);
+  const layerLoadTokensRef = useRef<Record<LayerKind, number>>({
+    frame: 0,
+    background: 0,
+  });
+  const pendingLayerUrlsRef = useRef(new Set<string>());
   const editorCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const exportCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -104,6 +224,7 @@ export default function Home() {
   const [historyPosition, setHistoryPosition] = useState(0);
   const [historyLength, setHistoryLength] = useState(1);
   const [isDropActive, setIsDropActive] = useState(false);
+  const [activeLayerDrop, setActiveLayerDrop] = useState<LayerKind | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -113,6 +234,23 @@ export default function Home() {
     editorRef.current = next;
     setEditor(next);
   }, []);
+
+  const pruneLayerAssets = useCallback(
+    (history: EditorState[], current: EditorState) => {
+      const retainedIds = new Set<number>();
+      [...history, current].forEach((snapshot) => {
+        if (snapshot.frameAssetId) retainedIds.add(snapshot.frameAssetId);
+        if (snapshot.backgroundAssetId) retainedIds.add(snapshot.backgroundAssetId);
+      });
+      layerAssetsRef.current.forEach((asset, id) => {
+        if (!retainedIds.has(id)) {
+          URL.revokeObjectURL(asset.url);
+          layerAssetsRef.current.delete(id);
+        }
+      });
+    },
+    [],
+  );
 
   const pushHistory = useCallback((snapshot?: EditorState) => {
     const next = { ...(snapshot ?? editorRef.current) };
@@ -127,7 +265,8 @@ export default function Home() {
     historyIndexRef.current = updated.length - 1;
     setHistoryPosition(historyIndexRef.current);
     setHistoryLength(updated.length);
-  }, []);
+    pruneLayerAssets(updated, next);
+  }, [pruneLayerAssets]);
 
   const commitPatch = useCallback(
     (patch: Partial<EditorState>) => {
@@ -202,7 +341,13 @@ export default function Home() {
 
   useEffect(() => {
     return () => {
+      layerLoadTokensRef.current.frame += 1;
+      layerLoadTokensRef.current.background += 1;
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+      pendingLayerUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      pendingLayerUrlsRef.current.clear();
+      layerAssetsRef.current.forEach((asset) => URL.revokeObjectURL(asset.url));
+      layerAssetsRef.current.clear();
       if (wheelTimerRef.current) clearTimeout(wheelTimerRef.current);
     };
   }, []);
@@ -214,8 +359,9 @@ export default function Home() {
       setHistoryPosition(0);
       setHistoryLength(1);
       applyState(next);
+      pruneLayerAssets([next], next);
     },
-    [applyState],
+    [applyState, pruneLayerAssets],
   );
 
   const loadFile = useCallback(
@@ -274,6 +420,100 @@ export default function Home() {
     loadFile(event.dataTransfer.files?.[0]);
   };
 
+  const loadLayerFile = useCallback(
+    (kind: LayerKind, file?: File) => {
+      if (!file) return;
+      setError("");
+      setNotice("");
+      const label = kind === "frame" ? "枠画像" : "背景画像";
+      const extension = file.name.split(".").pop()?.toLowerCase();
+      const validExtension = ["png", "jpg", "jpeg", "webp"].includes(
+        extension ?? "",
+      );
+      if (!ACCEPTED_TYPES.includes(file.type) && !validExtension) {
+        setError(`${label}にはPNG・JPG・WebPを使用してください。`);
+        return;
+      }
+
+      const url = URL.createObjectURL(file);
+      const requestToken = ++layerLoadTokensRef.current[kind];
+      pendingLayerUrlsRef.current.add(url);
+      const image = new Image();
+      image.decoding = "async";
+      image.onload = () => {
+        pendingLayerUrlsRef.current.delete(url);
+        if (requestToken !== layerLoadTokensRef.current[kind]) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        if (!image.naturalWidth || !image.naturalHeight) {
+          URL.revokeObjectURL(url);
+          setError(`${label}を読み込めませんでした。画像が破損していないか確認してください。`);
+          return;
+        }
+        const id = nextLayerAssetIdRef.current++;
+        layerAssetsRef.current.set(id, {
+          id,
+          image,
+          url,
+          name: file.name,
+          width: image.naturalWidth,
+          height: image.naturalHeight,
+        });
+        if (kind === "frame") {
+          commitPatch({
+            borderEnabled: true,
+            borderMode: "image",
+            frameAssetId: id,
+          });
+        } else {
+          commitPatch({ background: "image", backgroundAssetId: id });
+        }
+        setActiveLayerDrop(null);
+        setNotice(`${label}を設定しました`);
+        window.setTimeout(() => setNotice(""), 1800);
+      };
+      image.onerror = () => {
+        pendingLayerUrlsRef.current.delete(url);
+        if (requestToken !== layerLoadTokensRef.current[kind]) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        URL.revokeObjectURL(url);
+        setError(`${label}を読み込めませんでした。画像が破損している可能性があります。`);
+      };
+      image.src = url;
+    },
+    [commitPatch],
+  );
+
+  const handleLayerFileChange = (
+    kind: LayerKind,
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    loadLayerFile(kind, event.target.files?.[0]);
+    event.target.value = "";
+  };
+
+  const handleLayerDrop = (
+    kind: LayerKind,
+    event: ReactDragEvent<HTMLDivElement>,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveLayerDrop(null);
+    loadLayerFile(kind, event.dataTransfer.files?.[0]);
+  };
+
+  const handleLayerDragEnter = (
+    kind: LayerKind,
+    event: ReactDragEvent<HTMLDivElement>,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveLayerDrop(kind);
+  };
+
   const resolveBackground = useCallback(
     (state: EditorState, forceOpaque: boolean) => {
       if (state.background === "white") return "#ffffff";
@@ -299,6 +539,10 @@ export default function Home() {
       if (!context) return;
 
       context.clearRect(0, 0, dimension, dimension);
+      if (forceOpaque) {
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, dimension, dimension);
+      }
       context.save();
       context.beginPath();
       if (state.shape === "circle") {
@@ -312,6 +556,25 @@ export default function Home() {
       if (background) {
         context.fillStyle = background;
         context.fillRect(0, 0, dimension, dimension);
+      }
+
+      const backgroundAsset = state.backgroundAssetId
+        ? layerAssetsRef.current.get(state.backgroundAssetId)
+        : undefined;
+      if (state.background === "image" && backgroundAsset) {
+        const backgroundScale = Math.max(
+          dimension / backgroundAsset.image.naturalWidth,
+          dimension / backgroundAsset.image.naturalHeight,
+        );
+        const backgroundWidth = backgroundAsset.image.naturalWidth * backgroundScale;
+        const backgroundHeight = backgroundAsset.image.naturalHeight * backgroundScale;
+        context.drawImage(
+          backgroundAsset.image,
+          (dimension - backgroundWidth) / 2,
+          (dimension - backgroundHeight) / 2,
+          backgroundWidth,
+          backgroundHeight,
+        );
       }
 
       const coverScale = Math.max(
@@ -330,7 +593,25 @@ export default function Home() {
       context.drawImage(image, x, y, width, height);
       context.restore();
 
-      if (state.borderEnabled && state.borderWidth > 0) {
+      const frameAsset = state.frameAssetId
+        ? layerAssetsRef.current.get(state.frameAssetId)
+        : undefined;
+      if (state.borderEnabled && state.borderMode === "image" && frameAsset) {
+        context.save();
+        context.beginPath();
+        if (state.shape === "circle") {
+          context.arc(dimension / 2, dimension / 2, dimension / 2, 0, Math.PI * 2);
+        } else {
+          context.rect(0, 0, dimension, dimension);
+        }
+        context.clip();
+        context.drawImage(frameAsset.image, 0, 0, dimension, dimension);
+        context.restore();
+      } else if (
+        state.borderEnabled &&
+        state.borderMode === "color" &&
+        state.borderWidth > 0
+      ) {
         const lineWidth = clamp(
           state.borderWidth * (dimension / Math.max(state.size, 1)),
           1,
@@ -531,6 +812,12 @@ export default function Home() {
   const canRedo = historyPosition < historyLength - 1;
   const isTransparentJpg =
     editor.format === "jpg" && editor.background === "transparent";
+  const currentFrameAsset = editor.frameAssetId
+    ? layerAssetsRef.current.get(editor.frameAssetId)
+    : undefined;
+  const currentBackgroundAsset = editor.backgroundAssetId
+    ? layerAssetsRef.current.get(editor.backgroundAssetId)
+    : undefined;
 
   return (
     <div className="app-root">
@@ -828,39 +1115,94 @@ export default function Home() {
                       <em>{editor.borderEnabled ? "ON" : "OFF"}</em>
                     </label>
                   </div>
-                  <div className={`border-controls ${editor.borderEnabled ? "" : "is-disabled"}`}>
-                    <label className="color-field">
-                      <span>色</span>
-                      <span className="color-input-wrap">
-                        <input
-                          type="color"
-                          value={editor.borderColor}
-                          onChange={(event) => draftPatch({ borderColor: event.target.value })}
-                          onBlur={() => pushHistory()}
-                          disabled={!editor.borderEnabled}
-                          aria-label="縁取りの色"
-                        />
-                        <code>{editor.borderColor.toUpperCase()}</code>
-                      </span>
-                    </label>
-                    <label className="range-field">
-                      <span>
-                        太さ <output>{editor.borderWidth}px</output>
-                      </span>
-                      <input
-                        type="range"
-                        min="1"
-                        max="64"
-                        value={editor.borderWidth}
-                        onChange={(event) =>
-                          draftPatch({ borderWidth: Number(event.target.value) })
-                        }
-                        onPointerUp={() => pushHistory()}
-                        onKeyUp={() => pushHistory()}
-                        onBlur={() => pushHistory()}
+                  <div
+                    className={`border-options-stack ${editor.borderEnabled ? "" : "is-disabled"}`}
+                  >
+                    <div className="segmented-control two-up border-mode-control">
+                      <button
+                        type="button"
+                        className={editor.borderMode === "color" ? "is-selected" : ""}
+                        onClick={() => commitPatch({ borderMode: "color" })}
+                        aria-pressed={editor.borderMode === "color"}
                         disabled={!editor.borderEnabled}
-                      />
-                    </label>
+                      >
+                        <span className="border-mode-color-icon" aria-hidden="true" />
+                        色
+                      </button>
+                      <button
+                        type="button"
+                        className={editor.borderMode === "image" ? "is-selected" : ""}
+                        onClick={() => commitPatch({ borderMode: "image" })}
+                        aria-pressed={editor.borderMode === "image"}
+                        disabled={!editor.borderEnabled}
+                      >
+                        <span className="border-mode-image-icon" aria-hidden="true" />
+                        画像
+                      </button>
+                    </div>
+
+                    {editor.borderMode === "color" ? (
+                      <div className="border-controls">
+                        <label className="color-field">
+                          <span>色</span>
+                          <span className="color-input-wrap">
+                            <input
+                              type="color"
+                              value={editor.borderColor}
+                              onChange={(event) =>
+                                draftPatch({ borderColor: event.target.value })
+                              }
+                              onBlur={() => pushHistory()}
+                              disabled={!editor.borderEnabled}
+                              aria-label="縁取りの色"
+                            />
+                            <code>{editor.borderColor.toUpperCase()}</code>
+                          </span>
+                        </label>
+                        <label className="range-field">
+                          <span>
+                            太さ <output>{editor.borderWidth}px</output>
+                          </span>
+                          <input
+                            type="range"
+                            min="1"
+                            max="64"
+                            value={editor.borderWidth}
+                            onChange={(event) =>
+                              draftPatch({ borderWidth: Number(event.target.value) })
+                            }
+                            onPointerUp={() => pushHistory()}
+                            onKeyUp={() => pushHistory()}
+                            onBlur={() => pushHistory()}
+                            disabled={!editor.borderEnabled}
+                          />
+                        </label>
+                      </div>
+                    ) : (
+                      <>
+                        <LayerUpload
+                          asset={currentFrameAsset}
+                          active={activeLayerDrop === "frame"}
+                          disabled={!editor.borderEnabled}
+                          label="枠画像"
+                          help="透過PNG / WebP推奨"
+                          onOpen={() => frameInputRef.current?.click()}
+                          onDrop={(event) => handleLayerDrop("frame", event)}
+                          onDragEnter={(event) => handleLayerDragEnter("frame", event)}
+                          onDragLeave={() => setActiveLayerDrop(null)}
+                          onRemove={() =>
+                            commitPatch({ frameAssetId: null, borderMode: "color" })
+                          }
+                        />
+                        <input
+                          ref={frameInputRef}
+                          className="visually-hidden"
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,.jpg,.jpeg"
+                          onChange={(event) => handleLayerFileChange("frame", event)}
+                        />
+                      </>
+                    )}
                   </div>
                 </section>
 
@@ -873,6 +1215,7 @@ export default function Home() {
                         ["white", "白"],
                         ["black", "黒"],
                         ["custom", "自由色"],
+                        ["image", "画像"],
                       ] as [BackgroundMode, string][]
                     ).map(([value, label]) => (
                       <button
@@ -889,6 +1232,10 @@ export default function Home() {
                             className="background-swatch custom"
                             style={{ backgroundColor: editor.backgroundColor }}
                           />
+                        ) : value === "image" ? (
+                          <span className="background-swatch image" aria-hidden="true">
+                            <i />
+                          </span>
                         ) : (
                           <span className={`background-swatch ${value}`} />
                         )}
@@ -909,6 +1256,37 @@ export default function Home() {
                       />
                       <code>{editor.backgroundColor.toUpperCase()}</code>
                     </label>
+                  )}
+                  {editor.background === "image" && (
+                    <>
+                      <LayerUpload
+                        asset={currentBackgroundAsset}
+                        active={activeLayerDrop === "background"}
+                        label="背景画像"
+                        help="PNG / JPG / WebP"
+                        onOpen={() => backgroundInputRef.current?.click()}
+                        onDrop={(event) => handleLayerDrop("background", event)}
+                        onDragEnter={(event) =>
+                          handleLayerDragEnter("background", event)
+                        }
+                        onDragLeave={() => setActiveLayerDrop(null)}
+                        onRemove={() =>
+                          commitPatch({
+                            backgroundAssetId: null,
+                            background: "transparent",
+                          })
+                        }
+                      />
+                      <input
+                        ref={backgroundInputRef}
+                        className="visually-hidden"
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,.jpg,.jpeg"
+                        onChange={(event) =>
+                          handleLayerFileChange("background", event)
+                        }
+                      />
+                    </>
                   )}
                 </section>
 

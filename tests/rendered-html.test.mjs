@@ -45,6 +45,15 @@ test("ships the complete local-only editor surface", async () => {
   ]);
 
   assert.match(page, /image\/png,image\/jpeg,image\/webp/);
+  assert.match(page, /type BackgroundMode = [^;]+\| "image"/);
+  assert.match(page, /type BorderMode = "color" \| "image"/);
+  assert.match(page, /backgroundAssetId: number \| null/);
+  assert.match(page, /frameAssetId: number \| null/);
+  assert.match(page, /label="枠画像"/);
+  assert.match(page, /label="背景画像"/);
+  assert.match(page, /\{label\}をドロップ/);
+  assert.match(page, /context\.drawImage\(frameAsset\.image/);
+  assert.match(page, /URL\.revokeObjectURL\(asset\.url\)/);
   assert.match(
     page,
     /<h1 className="eyebrow">30秒で、ぴったりの一枚。<\/h1>/,
