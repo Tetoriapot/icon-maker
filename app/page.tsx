@@ -419,6 +419,7 @@ export default function Home() {
         return;
       }
 
+      const preserveCurrentSettings = imageRef.current !== null;
       const url = URL.createObjectURL(file);
       const image = new Image();
       image.decoding = "async";
@@ -435,7 +436,15 @@ export default function Home() {
             width: image.naturalWidth,
             height: image.naturalHeight,
           });
-          resetHistory({ ...INITIAL_EDITOR });
+          resetHistory(
+            preserveCurrentSettings
+              ? { ...editorRef.current }
+              : { ...INITIAL_EDITOR },
+          );
+          if (preserveCurrentSettings) {
+            setNotice("画像を差し替えました。設定は引き継がれています");
+            window.setTimeout(() => setNotice(""), 2200);
+          }
         } catch {
           URL.revokeObjectURL(url);
           setError("画像を読み込めませんでした。ファイルが破損していないか確認してください。");
@@ -891,6 +900,13 @@ export default function Home() {
     window.setTimeout(() => setNotice(""), 1800);
   };
 
+  const resetSettings = () => {
+    setError("");
+    commitPatch({ ...INITIAL_EDITOR });
+    setNotice("設定を初期状態に戻しました");
+    window.setTimeout(() => setNotice(""), 1800);
+  };
+
   const saveImage = async () => {
     const canvas = exportCanvasRef.current;
     if (!canvas || !imageRef.current) return;
@@ -1103,6 +1119,15 @@ export default function Home() {
                   accept="image/png,image/jpeg,image/webp,.jpg,.jpeg"
                   onChange={handleFileChange}
                 />
+                <button
+                  className="toolbar-button reset-settings-button"
+                  type="button"
+                  onClick={resetSettings}
+                  title="すべての設定を初期状態に戻す"
+                >
+                  <span aria-hidden="true">↺</span>
+                  設定をリセット
+                </button>
               </div>
             </div>
 

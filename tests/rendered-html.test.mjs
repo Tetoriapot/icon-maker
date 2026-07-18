@@ -83,6 +83,11 @@ test("ships the complete local-only editor surface", async () => {
   assert.match(page, /event\.preventDefault\(\);\s+event\.stopPropagation\(\)/);
   assert.doesNotMatch(page, /onWheel=\{handleWheel\}/);
   assert.match(styles, /\.editor-canvas\s*\{[^}]*overscroll-behavior: contain;[^}]*touch-action: none;/s);
+  assert.match(page, /const preserveCurrentSettings = imageRef\.current !== null/);
+  assert.match(page, /preserveCurrentSettings\s+\? \{ \.\.\.editorRef\.current \}\s+: \{ \.\.\.INITIAL_EDITOR \}/);
+  assert.match(page, /const resetSettings = \(\) => \{[^}]*commitPatch\(\{ \.\.\.INITIAL_EDITOR \}\)/s);
+  assert.match(page, /設定をリセット/);
+  assert.ok(page.indexOf("設定をリセット") > page.indexOf("別の画像"));
   assert.match(layout, /manifest:\s*"\/manifest\.webmanifest"/);
   assert.match(layout, /og\.png/);
   assert.match(manifest, /"display": "standalone"/);

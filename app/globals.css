@@ -607,6 +607,16 @@ input:disabled {
   color: var(--purple-dark);
 }
 
+.reset-settings-button {
+  color: var(--ink-faint);
+}
+
+.reset-settings-button:hover:not(:disabled) {
+  border-color: var(--line);
+  background: var(--surface-soft);
+  color: var(--ink);
+}
+
 .editor-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 370px;
@@ -1767,14 +1777,22 @@ code {
   .topbar-actions {
     width: 100%;
     justify-content: space-between;
+    gap: 4px;
   }
 
   .toolbar-button {
     flex: 1;
     justify-content: center;
+    gap: 4px;
+    padding-right: 6px;
+    padding-left: 6px;
   }
 
   .toolbar-button.replace-button {
+    flex: 0 0 auto;
+  }
+
+  .toolbar-button.reset-settings-button {
     flex: 0 0 auto;
   }
 
