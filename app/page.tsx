@@ -6,10 +6,12 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type CSSProperties,
   type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
+import { getNameLayout, NAME_POSITIONS, type NamePosition } from "./name-layout";
 
 type CropShape = "circle" | "square";
 type BackgroundMode = "transparent" | "white" | "black" | "custom" | "image";
@@ -30,6 +32,14 @@ type EditorState = {
   borderColor: string;
   borderWidth: number;
   frameAssetId: number | null;
+  nameEnabled: boolean;
+  nameText: string;
+  nameColor: string;
+  nameSize: number;
+  namePosition: NamePosition;
+  nameOutlineEnabled: boolean;
+  nameOutlineColor: string;
+  nameOutlineWidth: number;
   size: number;
   format: OutputFormat;
   quality: number;
@@ -74,6 +84,14 @@ const INITIAL_EDITOR: EditorState = {
   borderColor: "#ffffff",
   borderWidth: 12,
   frameAssetId: null,
+  nameEnabled: false,
+  nameText: "",
+  nameColor: "#ffffff",
+  nameSize: 11,
+  namePosition: "outside-bottom",
+  nameOutlineEnabled: true,
+  nameOutlineColor: "#211d2a",
+  nameOutlineWidth: 1.2,
   size: 512,
   format: "png",
   quality: 0.92,
@@ -85,6 +103,19 @@ function clamp(value: number, min: number, max: number) {
 
 function stateEquals(a: EditorState, b: EditorState) {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function getCropCenter(state: EditorState) {
+  const layout = getNameLayout(state.namePosition, state.nameSize);
+  const useOutsideNameLayout =
+    state.nameEnabled && Boolean(state.nameText.trim()) && layout.outside;
+  if (!useOutsideNameLayout) {
+    return { x: LOGICAL_SIZE / 2, y: LOGICAL_SIZE / 2 };
+  }
+  return {
+    x: (layout.cropX + layout.cropSize / 2) * LOGICAL_SIZE,
+    y: (layout.cropY + layout.cropSize / 2) * LOGICAL_SIZE,
+  };
 }
 
 function CheckerIcon() {
@@ -317,6 +348,17 @@ export default function Home() {
         target?.tagName === "INPUT" ||
         target?.tagName === "SELECT" ||
         target?.tagName === "TEXTAREA";
+      const inputType =
+        target?.tagName === "INPUT" ? (target as HTMLInputElement).type : "";
+      const usesNativeHistory =
+        target?.tagName === "TEXTAREA" ||
+        ["email", "number", "password", "search", "tel", "text", "url"].includes(
+          inputType,
+        );
+      const isHistoryShortcut =
+        (event.ctrlKey || event.metaKey) &&
+        ["y", "z"].includes(event.key.toLowerCase());
+      if (usesNativeHistory && isHistoryShortcut) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
         if (event.shiftKey) redo();
@@ -538,6 +580,30 @@ export default function Home() {
       const context = canvas.getContext("2d", { alpha: true });
       if (!context) return;
 
+      const nameText = state.nameText.trim();
+      const nameLayout = getNameLayout(state.namePosition, state.nameSize);
+      const useOutsideNameLayout =
+        state.nameEnabled && Boolean(nameText) && nameLayout.outside;
+      const cropX = useOutsideNameLayout ? nameLayout.cropX * dimension : 0;
+      const cropY = useOutsideNameLayout ? nameLayout.cropY * dimension : 0;
+      const cropSize = useOutsideNameLayout ? nameLayout.cropSize * dimension : dimension;
+      const addCropPath = (inset = 0) => {
+        const pathX = cropX + inset;
+        const pathY = cropY + inset;
+        const pathSize = Math.max(0, cropSize - inset * 2);
+        if (state.shape === "circle") {
+          context.arc(
+            pathX + pathSize / 2,
+            pathY + pathSize / 2,
+            pathSize / 2,
+            0,
+            Math.PI * 2,
+          );
+        } else {
+          context.rect(pathX, pathY, pathSize, pathSize);
+        }
+      };
+
       context.clearRect(0, 0, dimension, dimension);
       if (forceOpaque) {
         context.fillStyle = "#ffffff";
@@ -545,17 +611,13 @@ export default function Home() {
       }
       context.save();
       context.beginPath();
-      if (state.shape === "circle") {
-        context.arc(dimension / 2, dimension / 2, dimension / 2, 0, Math.PI * 2);
-      } else {
-        context.rect(0, 0, dimension, dimension);
-      }
+      addCropPath();
       context.clip();
 
       const background = resolveBackground(state, forceOpaque);
       if (background) {
         context.fillStyle = background;
-        context.fillRect(0, 0, dimension, dimension);
+        context.fillRect(cropX, cropY, cropSize, cropSize);
       }
 
       const backgroundAsset = state.backgroundAssetId
@@ -563,31 +625,37 @@ export default function Home() {
         : undefined;
       if (state.background === "image" && backgroundAsset) {
         const backgroundScale = Math.max(
-          dimension / backgroundAsset.image.naturalWidth,
-          dimension / backgroundAsset.image.naturalHeight,
+          cropSize / backgroundAsset.image.naturalWidth,
+          cropSize / backgroundAsset.image.naturalHeight,
         );
         const backgroundWidth = backgroundAsset.image.naturalWidth * backgroundScale;
         const backgroundHeight = backgroundAsset.image.naturalHeight * backgroundScale;
         context.drawImage(
           backgroundAsset.image,
-          (dimension - backgroundWidth) / 2,
-          (dimension - backgroundHeight) / 2,
+          cropX + (cropSize - backgroundWidth) / 2,
+          cropY + (cropSize - backgroundHeight) / 2,
           backgroundWidth,
           backgroundHeight,
         );
       }
 
       const coverScale = Math.max(
-        dimension / image.naturalWidth,
-        dimension / image.naturalHeight,
+        cropSize / image.naturalWidth,
+        cropSize / image.naturalHeight,
       );
       const scale = coverScale * state.zoom;
       const width = image.naturalWidth * scale;
       const height = image.naturalHeight * scale;
       const x =
-        dimension / 2 - width / 2 + (state.offsetX / LOGICAL_SIZE) * dimension;
+        cropX +
+        cropSize / 2 -
+        width / 2 +
+        (state.offsetX / LOGICAL_SIZE) * dimension;
       const y =
-        dimension / 2 - height / 2 + (state.offsetY / LOGICAL_SIZE) * dimension;
+        cropY +
+        cropSize / 2 -
+        height / 2 +
+        (state.offsetY / LOGICAL_SIZE) * dimension;
       context.imageSmoothingEnabled = true;
       context.imageSmoothingQuality = "high";
       context.drawImage(image, x, y, width, height);
@@ -599,13 +667,9 @@ export default function Home() {
       if (state.borderEnabled && state.borderMode === "image" && frameAsset) {
         context.save();
         context.beginPath();
-        if (state.shape === "circle") {
-          context.arc(dimension / 2, dimension / 2, dimension / 2, 0, Math.PI * 2);
-        } else {
-          context.rect(0, 0, dimension, dimension);
-        }
+        addCropPath();
         context.clip();
-        context.drawImage(frameAsset.image, 0, 0, dimension, dimension);
+        context.drawImage(frameAsset.image, cropX, cropY, cropSize, cropSize);
         context.restore();
       } else if (
         state.borderEnabled &&
@@ -615,30 +679,74 @@ export default function Home() {
         const lineWidth = clamp(
           state.borderWidth * (dimension / Math.max(state.size, 1)),
           1,
-          dimension / 3,
+          cropSize / 3,
         );
         context.save();
         context.strokeStyle = state.borderColor;
         context.lineWidth = lineWidth;
         context.lineJoin = "round";
         context.beginPath();
-        if (state.shape === "circle") {
-          context.arc(
-            dimension / 2,
-            dimension / 2,
-            dimension / 2 - lineWidth / 2,
-            0,
-            Math.PI * 2,
-          );
-        } else {
-          context.rect(
-            lineWidth / 2,
-            lineWidth / 2,
-            dimension - lineWidth,
-            dimension - lineWidth,
-          );
-        }
+        addCropPath(lineWidth / 2);
         context.stroke();
+        context.restore();
+      }
+
+      if (state.nameEnabled && nameText) {
+        const { horizontal, vertical } = nameLayout;
+        const textX = nameLayout.x * dimension;
+        const textY = nameLayout.y * dimension;
+        const edgeInset =
+          horizontal === "left"
+            ? nameLayout.x
+            : horizontal === "right"
+              ? 1 - nameLayout.x
+              : 0.5;
+        const maxWidthRatio =
+          nameLayout.outside
+            ? 0.88
+            : state.shape === "circle" && vertical !== "middle"
+            ? horizontal === "center"
+              ? 0.7
+              : 1 - edgeInset * 2
+            : horizontal === "center"
+              ? 0.84
+              : Math.min(0.76, 0.94 - edgeInset);
+        const fontFamily =
+          '\"Yu Gothic UI\", \"Hiragino Sans\", \"Noto Sans JP\", sans-serif';
+        let fontSize = clamp(
+          (dimension * state.nameSize) / 100,
+          dimension * 0.04,
+          dimension * 0.28,
+        );
+
+        context.save();
+        if (!nameLayout.outside) {
+          context.beginPath();
+          addCropPath();
+          context.clip();
+        }
+        context.font = `800 ${fontSize}px ${fontFamily}`;
+        const measuredWidth = context.measureText(nameText).width;
+        const maxWidth = dimension * maxWidthRatio;
+        if (measuredWidth > maxWidth) {
+          fontSize *= maxWidth / measuredWidth;
+          context.font = `800 ${fontSize}px ${fontFamily}`;
+        }
+        context.textAlign = horizontal;
+        context.textBaseline = "middle";
+        context.lineJoin = "round";
+        context.lineCap = "round";
+        if (state.nameOutlineEnabled && state.nameOutlineWidth > 0) {
+          context.strokeStyle = state.nameOutlineColor;
+          context.lineWidth = clamp(
+            (dimension * state.nameOutlineWidth) / 100,
+            dimension * 0.002,
+            dimension * 0.08,
+          );
+          context.strokeText(nameText, textX, textY);
+        }
+        context.fillStyle = state.nameColor;
+        context.fillText(nameText, textX, textY);
         context.restore();
       }
     },
@@ -712,12 +820,13 @@ export default function Home() {
       const midY = (((a.y + b.y) / 2 - rect.top) / rect.height) * LOGICAL_SIZE;
       const startMidX = gesture.pinchMidX ?? LOGICAL_SIZE / 2;
       const startMidY = gesture.pinchMidY ?? LOGICAL_SIZE / 2;
-      const oldCenterX = LOGICAL_SIZE / 2 + gesture.origin.offsetX;
-      const oldCenterY = LOGICAL_SIZE / 2 + gesture.origin.offsetY;
+      const cropCenter = getCropCenter(gesture.origin);
+      const oldCenterX = cropCenter.x + gesture.origin.offsetX;
+      const oldCenterY = cropCenter.y + gesture.origin.offsetY;
       draftPatch({
         zoom,
-        offsetX: midX + (oldCenterX - startMidX) * actualRatio - LOGICAL_SIZE / 2,
-        offsetY: midY + (oldCenterY - startMidY) * actualRatio - LOGICAL_SIZE / 2,
+        offsetX: midX + (oldCenterX - startMidX) * actualRatio - cropCenter.x,
+        offsetY: midY + (oldCenterY - startMidY) * actualRatio - cropCenter.y,
       });
     } else if (pointers.length === 1) {
       const point = pointers[0];
@@ -755,8 +864,9 @@ export default function Home() {
     const current = editorRef.current;
     const nextZoom = clamp(current.zoom * Math.exp(-event.deltaY * 0.0015), 0.5, 4);
     const ratio = nextZoom / current.zoom;
-    const anchorX = pointX - LOGICAL_SIZE / 2;
-    const anchorY = pointY - LOGICAL_SIZE / 2;
+    const cropCenter = getCropCenter(current);
+    const anchorX = pointX - cropCenter.x;
+    const anchorY = pointY - cropCenter.y;
     draftPatch({
       zoom: nextZoom,
       offsetX: anchorX + (current.offsetX - anchorX) * ratio,
@@ -817,6 +927,19 @@ export default function Home() {
     : undefined;
   const currentBackgroundAsset = editor.backgroundAssetId
     ? layerAssetsRef.current.get(editor.backgroundAssetId)
+    : undefined;
+  const currentNameLayout = getNameLayout(editor.namePosition, editor.nameSize);
+  const hasOutsideName =
+    editor.nameEnabled &&
+    Boolean(editor.nameText.trim()) &&
+    currentNameLayout.outside;
+  const outsideCropGuideStyle: CSSProperties | undefined = hasOutsideName
+    ? {
+        top: `${currentNameLayout.cropY * 100}%`,
+        right: `${(1 - currentNameLayout.cropX - currentNameLayout.cropSize) * 100}%`,
+        bottom: `${(1 - currentNameLayout.cropY - currentNameLayout.cropSize) * 100}%`,
+        left: `${currentNameLayout.cropX * 100}%`,
+      }
     : undefined;
 
   return (
@@ -997,7 +1120,7 @@ export default function Home() {
 
                 <div className="canvas-stage">
                   <div
-                    className={`canvas-wrap checkerboard ${editor.shape}`}
+                    className={`canvas-wrap checkerboard ${editor.shape} ${hasOutsideName ? "has-outside-name" : ""}`}
                     data-label={isDropActive ? "画像をドロップして差し替え" : undefined}
                   >
                     <canvas
@@ -1011,7 +1134,11 @@ export default function Home() {
                       onDoubleClick={resetView}
                       aria-label="切り抜き位置を調整するキャンバス。ドラッグで移動、ホイールで拡大縮小できます"
                     />
-                    <span className="crop-guide" aria-hidden="true" />
+                    <span
+                      className="crop-guide"
+                      style={outsideCropGuideStyle}
+                      aria-hidden="true"
+                    />
                   </div>
                 </div>
 
@@ -1070,7 +1197,9 @@ export default function Home() {
                       <i aria-hidden="true" /> LIVE
                     </span>
                   </div>
-                  <div className={`preview-frame checkerboard ${editor.shape}`}>
+                  <div
+                    className={`preview-frame checkerboard ${editor.shape} ${hasOutsideName ? "has-outside-name" : ""}`}
+                  >
                     <canvas ref={previewCanvasRef} aria-label="完成アイコンのプレビュー" />
                   </div>
                   <p className="preview-meta">
@@ -1288,6 +1417,155 @@ export default function Home() {
                       />
                     </>
                   )}
+                </section>
+
+                <section className="setting-section">
+                  <div className="setting-heading-row">
+                    <h3>名前</h3>
+                    <label className="switch">
+                      <input
+                        type="checkbox"
+                        checked={editor.nameEnabled}
+                        onChange={(event) =>
+                          commitPatch({ nameEnabled: event.target.checked })
+                        }
+                        aria-label="名前を表示"
+                      />
+                      <span aria-hidden="true" />
+                      <em>{editor.nameEnabled ? "ON" : "OFF"}</em>
+                    </label>
+                  </div>
+
+                  <div
+                    className={`name-options-stack ${editor.nameEnabled ? "" : "is-disabled"}`}
+                  >
+                    <label className="name-text-field">
+                      <span>表示する名前</span>
+                      <input
+                        type="text"
+                        maxLength={30}
+                        value={editor.nameText}
+                        placeholder="名前を入力"
+                        onChange={(event) => draftPatch({ nameText: event.target.value })}
+                        onBlur={() => pushHistory()}
+                        disabled={!editor.nameEnabled}
+                      />
+                    </label>
+
+                    <div className="name-style-grid">
+                      <label className="color-field">
+                        <span>文字色</span>
+                        <span className="color-input-wrap">
+                          <input
+                            type="color"
+                            value={editor.nameColor}
+                            onChange={(event) => draftPatch({ nameColor: event.target.value })}
+                            onBlur={() => pushHistory()}
+                            disabled={!editor.nameEnabled}
+                            aria-label="名前の文字色"
+                          />
+                          <code>{editor.nameColor.toUpperCase()}</code>
+                        </span>
+                      </label>
+                      <label className="range-field">
+                        <span>
+                          大きさ <output>{editor.nameSize}%</output>
+                        </span>
+                        <input
+                          type="range"
+                          min="4"
+                          max="24"
+                          step="1"
+                          value={editor.nameSize}
+                          onChange={(event) =>
+                            draftPatch({ nameSize: Number(event.target.value) })
+                          }
+                          onPointerUp={() => pushHistory()}
+                          onKeyUp={() => pushHistory()}
+                          onBlur={() => pushHistory()}
+                          disabled={!editor.nameEnabled}
+                          aria-label="名前の大きさ"
+                        />
+                      </label>
+                    </div>
+
+                    <fieldset className="name-position-field" disabled={!editor.nameEnabled}>
+                      <legend>位置</legend>
+                      <div className="name-position-grid">
+                        {NAME_POSITIONS.map(({ value, label }) => (
+                          <button
+                            type="button"
+                            key={value}
+                            className={`${editor.namePosition === value ? "is-selected" : ""} ${value === "outside-bottom" ? "is-outside-option" : ""}`}
+                            onClick={() => commitPatch({ namePosition: value })}
+                            aria-pressed={editor.namePosition === value}
+                            aria-label={`名前の位置: ${label}`}
+                          >
+                            <span aria-hidden="true" />
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </fieldset>
+
+                    <div className="name-outline-heading">
+                      <span>文字の縁取り</span>
+                      <label className="switch compact-switch">
+                        <input
+                          type="checkbox"
+                          checked={editor.nameOutlineEnabled}
+                          onChange={(event) =>
+                            commitPatch({ nameOutlineEnabled: event.target.checked })
+                          }
+                          disabled={!editor.nameEnabled}
+                          aria-label="名前の縁取り"
+                        />
+                        <span aria-hidden="true" />
+                        <em>{editor.nameOutlineEnabled ? "ON" : "OFF"}</em>
+                      </label>
+                    </div>
+
+                    <div
+                      className={`name-outline-controls ${editor.nameOutlineEnabled ? "" : "is-disabled"}`}
+                    >
+                      <label className="color-field">
+                        <span>縁の色</span>
+                        <span className="color-input-wrap">
+                          <input
+                            type="color"
+                            value={editor.nameOutlineColor}
+                            onChange={(event) =>
+                              draftPatch({ nameOutlineColor: event.target.value })
+                            }
+                            onBlur={() => pushHistory()}
+                            disabled={!editor.nameEnabled || !editor.nameOutlineEnabled}
+                            aria-label="名前の縁取り色"
+                          />
+                          <code>{editor.nameOutlineColor.toUpperCase()}</code>
+                        </span>
+                      </label>
+                      <label className="range-field">
+                        <span>
+                          太さ <output>{editor.nameOutlineWidth.toFixed(1)}%</output>
+                        </span>
+                        <input
+                          type="range"
+                          min="0.2"
+                          max="3"
+                          step="0.1"
+                          value={editor.nameOutlineWidth}
+                          onChange={(event) =>
+                            draftPatch({ nameOutlineWidth: Number(event.target.value) })
+                          }
+                          onPointerUp={() => pushHistory()}
+                          onKeyUp={() => pushHistory()}
+                          onBlur={() => pushHistory()}
+                          disabled={!editor.nameEnabled || !editor.nameOutlineEnabled}
+                          aria-label="名前の縁取りの太さ"
+                        />
+                      </label>
+                    </div>
+                  </div>
                 </section>
 
                 <section className="setting-section output-section">
