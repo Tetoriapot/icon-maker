@@ -38,8 +38,9 @@ test("server-renders the Japanese icon maker", async () => {
 });
 
 test("ships the complete local-only editor surface", async () => {
-  const [page, nameLayout, layout, packageJson, manifest] = await Promise.all([
+  const [page, styles, nameLayout, layout, packageJson, manifest] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/name-layout.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -77,7 +78,11 @@ test("ships the complete local-only editor surface", async () => {
   assert.match(page, /PRESET_SIZES = \[128, 256, 512, 1024\]/);
   assert.match(page, /type="number"/);
   assert.match(page, /onPointerDown=\{beginPointer\}/);
-  assert.match(page, /onWheel=\{handleWheel\}/);
+  assert.match(page, /addEventListener\("wheel", handleWheel, \{ passive: false \}\)/);
+  assert.match(page, /removeEventListener\("wheel", handleWheel\)/);
+  assert.match(page, /event\.preventDefault\(\);\s+event\.stopPropagation\(\)/);
+  assert.doesNotMatch(page, /onWheel=\{handleWheel\}/);
+  assert.match(styles, /\.editor-canvas\s*\{[^}]*overscroll-behavior: contain;[^}]*touch-action: none;/s);
   assert.match(layout, /manifest:\s*"\/manifest\.webmanifest"/);
   assert.match(layout, /og\.png/);
   assert.match(manifest, /"display": "standalone"/);

@@ -9,7 +9,6 @@ import {
   type CSSProperties,
   type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
-  type WheelEvent as ReactWheelEvent,
 } from "react";
 import { getNameLayout, NAME_POSITIONS, type NamePosition } from "./name-layout";
 
@@ -856,9 +855,12 @@ export default function Home() {
     };
   };
 
-  const handleWheel = (event: ReactWheelEvent<HTMLCanvasElement>) => {
+  const handleWheel = useCallback((event: WheelEvent) => {
     event.preventDefault();
-    const rect = event.currentTarget.getBoundingClientRect();
+    event.stopPropagation();
+    const canvas = editorCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
     const pointX = ((event.clientX - rect.left) / rect.width) * LOGICAL_SIZE;
     const pointY = ((event.clientY - rect.top) / rect.height) * LOGICAL_SIZE;
     const current = editorRef.current;
@@ -874,7 +876,14 @@ export default function Home() {
     });
     if (wheelTimerRef.current) clearTimeout(wheelTimerRef.current);
     wheelTimerRef.current = setTimeout(() => pushHistory(), 180);
-  };
+  }, [draftPatch, pushHistory]);
+
+  useEffect(() => {
+    const canvas = editorCanvasRef.current;
+    if (!canvas || !imageInfo) return;
+    canvas.addEventListener("wheel", handleWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", handleWheel);
+  }, [handleWheel, imageInfo]);
 
   const resetView = () => {
     commitPatch({ zoom: 1, offsetX: 0, offsetY: 0 });
@@ -1130,7 +1139,6 @@ export default function Home() {
                       onPointerMove={movePointer}
                       onPointerUp={endPointer}
                       onPointerCancel={endPointer}
-                      onWheel={handleWheel}
                       onDoubleClick={resetView}
                       aria-label="切り抜き位置を調整するキャンバス。ドラッグで移動、ホイールで拡大縮小できます"
                     />
