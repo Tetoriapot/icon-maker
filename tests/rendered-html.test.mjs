@@ -1,16 +1,78 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import {
+  MAX_IMAGE_EDGE,
+  MAX_IMAGE_FILE_BYTES,
+  MAX_IMAGE_PIXELS,
+  detectSupportedImageType,
+  validateImageDimensions,
+  validateImageFile,
+} from "../app/image-validation.ts";
 import { getNameLayout, NAME_POSITIONS } from "../app/name-layout.ts";
 
-async function render() {
+test("rejects disguised or oversized files before decoding", async () => {
+  assert.equal(
+    detectSupportedImageType(
+      Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    ),
+    "image/png",
+  );
+  assert.equal(
+    detectSupportedImageType(Uint8Array.from([0xff, 0xd8, 0xff, 0xe0])),
+    "image/jpeg",
+  );
+  assert.equal(
+    detectSupportedImageType(
+      Uint8Array.from([
+        0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50,
+      ]),
+    ),
+    "image/webp",
+  );
+  assert.equal(
+    detectSupportedImageType(
+      new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg">'),
+    ),
+    null,
+  );
+
+  const disguisedSvg = new Blob([
+    '<svg xmlns="http://www.w3.org/2000/svg"><script /></svg>',
+  ]);
+  assert.deepEqual(await validateImageFile(disguisedSvg), {
+    ok: false,
+    reason: "unsupported",
+  });
+
+  const oversizedWithoutAllocation = {
+    size: MAX_IMAGE_FILE_BYTES + 1,
+    slice() {
+      throw new Error("size is checked before reading");
+    },
+  };
+  assert.deepEqual(await validateImageFile(oversizedWithoutAllocation), {
+    ok: false,
+    reason: "too-large",
+  });
+});
+
+test("allows 6000px artwork while bounding decoded image memory", () => {
+  assert.equal(validateImageDimensions(6000, 6000).ok, true);
+  assert.equal(validateImageDimensions(MAX_IMAGE_EDGE + 1, 1).ok, false);
+  assert.ok(7000 * 6000 > MAX_IMAGE_PIXELS);
+  assert.equal(validateImageDimensions(7000, 6000).ok, false);
+  assert.equal(validateImageDimensions(0, 6000).ok, false);
+});
+
+async function render(extraHeaders = {}) {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
     new Request("http://localhost/", {
-      headers: { accept: "text/html" },
+      headers: { accept: "text/html", ...extraHeaders },
     }),
     {
       ASSETS: {
@@ -28,6 +90,14 @@ test("server-renders the Japanese icon maker", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
+  assert.match(
+    response.headers.get("content-security-policy") ?? "",
+    /frame-ancestors 'none'/,
+  );
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.match(response.headers.get("permissions-policy") ?? "", /camera=\(\)/);
 
   const html = await response.text();
   assert.match(html, /<html[^>]*lang="ja"/i);
@@ -35,6 +105,17 @@ test("server-renders the Japanese icon maker", async () => {
   assert.match(html, /好きな画像を/);
   assert.match(html, /画像は端末内だけで処理/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
+  assert.doesNotMatch(html, /C:[\\/]Projects|\.vinext[\\/]fonts/i);
+});
+
+test("uses the canonical public origin instead of forwarded host input", async () => {
+  const response = await render({
+    "x-forwarded-host": "evil.example",
+    "x-forwarded-proto": "javascript",
+  });
+  const html = await response.text();
+  assert.match(html, /https:\/\/icon-maker-jp\.tetoriapot\.chatgpt\.site\/og\.png/);
+  assert.doesNotMatch(html, /javascript:\/\/|evil\.example/i);
 });
 
 test("ships the complete local-only editor surface", async () => {
@@ -68,6 +149,10 @@ test("ships the complete local-only editor surface", async () => {
   assert.match(page, /名前の縁取りの太さ/);
   assert.match(page, /usesNativeHistory && isHistoryShortcut/);
   assert.match(page, /URL\.revokeObjectURL\(asset\.url\)/);
+  assert.equal(
+    (page.match(/file\.slice\(0, file\.size, validation\.type\)/g) ?? []).length,
+    2,
+  );
   assert.match(
     page,
     /<h1 className="eyebrow">30秒で、ぴったりの一枚。<\/h1>/,
@@ -90,6 +175,8 @@ test("ships the complete local-only editor surface", async () => {
   assert.ok(page.indexOf("設定をリセット") > page.indexOf("別の画像"));
   assert.match(layout, /manifest:\s*"\/manifest\.webmanifest"/);
   assert.match(layout, /og\.png/);
+  assert.match(layout, /https:\/\/icon-maker-jp\.tetoriapot\.chatgpt\.site/);
+  assert.doesNotMatch(layout, /next\/font|x-forwarded-host|x-forwarded-proto/);
   assert.match(manifest, /"display": "standalone"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 });

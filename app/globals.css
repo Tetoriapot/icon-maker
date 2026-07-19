@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
 :root {
+  --font-geist-sans: "Yu Gothic UI";
+  --font-geist-mono: "Cascadia Mono";
   --bg: #f8f7fb;
   --surface: #ffffff;
   --surface-soft: #f3f1f8;

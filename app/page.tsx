@@ -11,6 +11,14 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { getNameLayout, NAME_POSITIONS, type NamePosition } from "./name-layout";
+import {
+  MAX_IMAGE_EDGE,
+  MAX_IMAGE_FILE_BYTES,
+  MAX_IMAGE_PIXELS,
+  validateImageDimensions,
+  validateImageFile,
+  type ImageFileValidation,
+} from "./image-validation";
 
 type CropShape = "circle" | "square";
 type BackgroundMode = "transparent" | "white" | "black" | "custom" | "image";
@@ -67,8 +75,31 @@ type Gesture = {
 
 const LOGICAL_SIZE = 1000;
 const MAX_HISTORY = 50;
-const ACCEPTED_TYPES = ["image/png", "image/jpeg", "image/webp"];
 const PRESET_SIZES = [128, 256, 512, 1024];
+
+const MAX_FILE_SIZE_LABEL = `${MAX_IMAGE_FILE_BYTES / 1024 / 1024}MB`;
+const MAX_EDGE_LABEL = MAX_IMAGE_EDGE.toLocaleString("ja-JP");
+const MAX_PIXELS_LABEL = `${MAX_IMAGE_PIXELS / 10_000}万画素`;
+
+function getFileValidationMessage(
+  validation: Exclude<ImageFileValidation, { ok: true }>,
+  label = "画像",
+) {
+  if (validation.reason === "too-large") {
+    return `${label}のファイルサイズが大きすぎます。${MAX_FILE_SIZE_LABEL}以下の画像を選んでください。`;
+  }
+  if (validation.reason === "dimensions-too-large") {
+    return getDimensionValidationMessage(label);
+  }
+  if (validation.reason === "unreadable") {
+    return `${label}を読み込めませんでした。ファイルが破損していないか確認してください。`;
+  }
+  return `${label}の形式には対応していません。PNG・JPG・WebPの画像を選んでください。`;
+}
+
+function getDimensionValidationMessage(label = "画像") {
+  return `${label}のサイズが大きすぎます。1辺${MAX_EDGE_LABEL}px以下・合計${MAX_PIXELS_LABEL}以下の画像を選んでください。`;
+}
 
 const INITIAL_EDITOR: EditorState = {
   zoom: 1,
@@ -232,6 +263,8 @@ export default function Home() {
   const backgroundInputRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
+  const imageLoadTokenRef = useRef(0);
+  const pendingImageUrlsRef = useRef(new Set<string>());
   const layerAssetsRef = useRef(new Map<number, LayerAsset>());
   const nextLayerAssetIdRef = useRef(1);
   const layerLoadTokensRef = useRef<Record<LayerKind, number>>({
@@ -382,9 +415,12 @@ export default function Home() {
 
   useEffect(() => {
     return () => {
+      imageLoadTokenRef.current += 1;
       layerLoadTokensRef.current.frame += 1;
       layerLoadTokensRef.current.background += 1;
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+      pendingImageUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      pendingImageUrlsRef.current.clear();
       pendingLayerUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
       pendingLayerUrlsRef.current.clear();
       layerAssetsRef.current.forEach((asset) => URL.revokeObjectURL(asset.url));
@@ -406,51 +442,68 @@ export default function Home() {
   );
 
   const loadFile = useCallback(
-    (file?: File) => {
+    async (file?: File) => {
       if (!file) return;
+      const requestToken = ++imageLoadTokenRef.current;
       setError("");
       setNotice("");
-      const extension = file.name.split(".").pop()?.toLowerCase();
-      const validExtension = ["png", "jpg", "jpeg", "webp"].includes(
-        extension ?? "",
-      );
-      if (!ACCEPTED_TYPES.includes(file.type) && !validExtension) {
-        setError("この形式には対応していません。PNG・JPG・WebPを選んでください。");
+
+      const validation = await validateImageFile(file);
+      if (requestToken !== imageLoadTokenRef.current) return;
+      if (!validation.ok) {
+        setError(getFileValidationMessage(validation));
         return;
       }
 
       const preserveCurrentSettings = imageRef.current !== null;
-      const url = URL.createObjectURL(file);
+      const safeBlob = file.slice(0, file.size, validation.type);
+      const url = URL.createObjectURL(safeBlob);
+      pendingImageUrlsRef.current.add(url);
       const image = new Image();
       image.decoding = "async";
       image.onload = () => {
-        try {
-          if (!image.naturalWidth || !image.naturalHeight) {
-            throw new Error("invalid image");
-          }
-          if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-          objectUrlRef.current = url;
-          imageRef.current = image;
-          setImageInfo({
-            name: file.name,
-            width: image.naturalWidth,
-            height: image.naturalHeight,
-          });
-          resetHistory(
-            preserveCurrentSettings
-              ? { ...editorRef.current }
-              : { ...INITIAL_EDITOR },
-          );
-          if (preserveCurrentSettings) {
-            setNotice("画像を差し替えました。設定は引き継がれています");
-            window.setTimeout(() => setNotice(""), 2200);
-          }
-        } catch {
+        pendingImageUrlsRef.current.delete(url);
+        if (requestToken !== imageLoadTokenRef.current) {
           URL.revokeObjectURL(url);
-          setError("画像を読み込めませんでした。ファイルが破損していないか確認してください。");
+          return;
+        }
+        const dimensions = validateImageDimensions(
+          image.naturalWidth,
+          image.naturalHeight,
+        );
+        if (!dimensions.ok) {
+          URL.revokeObjectURL(url);
+          setError(
+            dimensions.reason === "too-large"
+              ? getDimensionValidationMessage()
+              : "画像を読み込めませんでした。ファイルが破損していないか確認してください。",
+          );
+          return;
+        }
+        if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = url;
+        imageRef.current = image;
+        setImageInfo({
+          name: file.name,
+          width: image.naturalWidth,
+          height: image.naturalHeight,
+        });
+        resetHistory(
+          preserveCurrentSettings
+            ? { ...editorRef.current }
+            : { ...INITIAL_EDITOR },
+        );
+        if (preserveCurrentSettings) {
+          setNotice("画像を差し替えました。設定は引き継がれています");
+          window.setTimeout(() => setNotice(""), 2200);
         }
       };
       image.onerror = () => {
+        pendingImageUrlsRef.current.delete(url);
+        if (requestToken !== imageLoadTokenRef.current) {
+          URL.revokeObjectURL(url);
+          return;
+        }
         URL.revokeObjectURL(url);
         setError("画像を読み込めませんでした。ファイルが破損している可能性があります。");
       };
@@ -460,33 +513,33 @@ export default function Home() {
   );
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    loadFile(event.target.files?.[0]);
+    void loadFile(event.target.files?.[0]);
     event.target.value = "";
   };
 
   const handleDrop = (event: ReactDragEvent<HTMLElement>) => {
     event.preventDefault();
     setIsDropActive(false);
-    loadFile(event.dataTransfer.files?.[0]);
+    void loadFile(event.dataTransfer.files?.[0]);
   };
 
   const loadLayerFile = useCallback(
-    (kind: LayerKind, file?: File) => {
+    async (kind: LayerKind, file?: File) => {
       if (!file) return;
+      const requestToken = ++layerLoadTokensRef.current[kind];
       setError("");
       setNotice("");
       const label = kind === "frame" ? "枠画像" : "背景画像";
-      const extension = file.name.split(".").pop()?.toLowerCase();
-      const validExtension = ["png", "jpg", "jpeg", "webp"].includes(
-        extension ?? "",
-      );
-      if (!ACCEPTED_TYPES.includes(file.type) && !validExtension) {
-        setError(`${label}にはPNG・JPG・WebPを使用してください。`);
+
+      const validation = await validateImageFile(file);
+      if (requestToken !== layerLoadTokensRef.current[kind]) return;
+      if (!validation.ok) {
+        setError(getFileValidationMessage(validation, label));
         return;
       }
 
-      const url = URL.createObjectURL(file);
-      const requestToken = ++layerLoadTokensRef.current[kind];
+      const safeBlob = file.slice(0, file.size, validation.type);
+      const url = URL.createObjectURL(safeBlob);
       pendingLayerUrlsRef.current.add(url);
       const image = new Image();
       image.decoding = "async";
@@ -496,9 +549,17 @@ export default function Home() {
           URL.revokeObjectURL(url);
           return;
         }
-        if (!image.naturalWidth || !image.naturalHeight) {
+        const dimensions = validateImageDimensions(
+          image.naturalWidth,
+          image.naturalHeight,
+        );
+        if (!dimensions.ok) {
           URL.revokeObjectURL(url);
-          setError(`${label}を読み込めませんでした。画像が破損していないか確認してください。`);
+          setError(
+            dimensions.reason === "too-large"
+              ? getDimensionValidationMessage(label)
+              : `${label}を読み込めませんでした。画像が破損していないか確認してください。`,
+          );
           return;
         }
         const id = nextLayerAssetIdRef.current++;
@@ -541,7 +602,7 @@ export default function Home() {
     kind: LayerKind,
     event: ChangeEvent<HTMLInputElement>,
   ) => {
-    loadLayerFile(kind, event.target.files?.[0]);
+    void loadLayerFile(kind, event.target.files?.[0]);
     event.target.value = "";
   };
 
@@ -552,7 +613,7 @@ export default function Home() {
     event.preventDefault();
     event.stopPropagation();
     setActiveLayerDrop(null);
-    loadLayerFile(kind, event.dataTransfer.files?.[0]);
+    void loadLayerFile(kind, event.dataTransfer.files?.[0]);
   };
 
   const handleLayerDragEnter = (
