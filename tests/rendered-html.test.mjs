@@ -183,11 +183,12 @@ test("ships the complete local-only editor surface", async () => {
 });
 
 test("ships a static GitHub Pages deployment without changing the Sites build", async () => {
-  const [nextConfig, workflow, manifest, packageJson] = await Promise.all([
+  const [nextConfig, workflow, manifest, packageJson, pnpmWorkspace] = await Promise.all([
     readFile(new URL("../next.config.ts", import.meta.url), "utf8"),
     readFile(new URL("../.github/workflows/pages.yml", import.meta.url), "utf8"),
     readFile(new URL("../public/manifest.webmanifest", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../pnpm-workspace.yaml", import.meta.url), "utf8"),
   ]);
 
   assert.match(nextConfig, /process\.env\.GITHUB_PAGES === "true"/);
@@ -201,6 +202,8 @@ test("ships a static GitHub Pages deployment without changing the Sites build", 
   assert.match(workflow, /path: out/);
   assert.match(manifest, /"start_url": "\.\/"/);
   assert.match(manifest, /"src": "favicon\.svg"/);
+  assert.doesNotMatch(pnpmWorkspace, /set this to true or false/);
+  assert.match(pnpmWorkspace, /allowBuilds:[\s\S]*esbuild: true[\s\S]*sharp: true/);
 });
 
 test("lays out all name positions safely and reserves space below the icon", () => {
