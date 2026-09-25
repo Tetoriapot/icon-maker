@@ -173,12 +173,34 @@ test("ships the complete local-only editor surface", async () => {
   assert.match(page, /const resetSettings = \(\) => \{[^}]*commitPatch\(\{ \.\.\.INITIAL_EDITOR \}\)/s);
   assert.match(page, /設定をリセット/);
   assert.ok(page.indexOf("設定をリセット") > page.indexOf("別の画像"));
-  assert.match(layout, /manifest:\s*"\/manifest\.webmanifest"/);
+  assert.match(layout, /const BASE_PATH = process\.env\.NEXT_PUBLIC_BASE_PATH \?\? ""/);
+  assert.match(layout, /manifest:\s*`\$\{BASE_PATH\}\/manifest\.webmanifest`/);
   assert.match(layout, /og\.png/);
   assert.match(layout, /https:\/\/icon-maker-jp\.tetoriapot\.chatgpt\.site/);
   assert.doesNotMatch(layout, /next\/font|x-forwarded-host|x-forwarded-proto/);
   assert.match(manifest, /"display": "standalone"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
+});
+
+test("ships a static GitHub Pages deployment without changing the Sites build", async () => {
+  const [nextConfig, workflow, manifest, packageJson] = await Promise.all([
+    readFile(new URL("../next.config.ts", import.meta.url), "utf8"),
+    readFile(new URL("../.github/workflows/pages.yml", import.meta.url), "utf8"),
+    readFile(new URL("../public/manifest.webmanifest", import.meta.url), "utf8"),
+    readFile(new URL("../package.json", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(nextConfig, /process\.env\.GITHUB_PAGES === "true"/);
+  assert.match(nextConfig, /output: "export"/);
+  assert.match(nextConfig, /basePath: pagesBasePath/);
+  assert.match(packageJson, /"build:pages": "next build"/);
+  assert.match(workflow, /persist-credentials: false/);
+  assert.match(workflow, /actions\/configure-pages@v5/);
+  assert.match(workflow, /actions\/upload-pages-artifact@v4/);
+  assert.match(workflow, /actions\/deploy-pages@v4/);
+  assert.match(workflow, /path: out/);
+  assert.match(manifest, /"start_url": "\.\/"/);
+  assert.match(manifest, /"src": "favicon\.svg"/);
 });
 
 test("lays out all name positions safely and reserves space below the icon", () => {

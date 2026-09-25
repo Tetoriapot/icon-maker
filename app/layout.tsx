@@ -1,7 +1,10 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
-const SITE_URL = "https://icon-maker-jp.tetoriapot.chatgpt.site";
+const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL ??
+  "https://icon-maker-jp.tetoriapot.chatgpt.site";
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -9,10 +12,10 @@ export const metadata: Metadata = {
   description:
     "画像をブラウザ内で切り抜き、円形・正方形のアイコンとして保存。登録不要、アップロード不要で使えます。",
   applicationName: "アイコンメーカー",
-  manifest: "/manifest.webmanifest",
+  manifest: `${BASE_PATH}/manifest.webmanifest`,
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
+    icon: `${BASE_PATH}/favicon.svg`,
+    shortcut: `${BASE_PATH}/favicon.svg`,
   },
   openGraph: {
     title: "好きな画像を、あなたらしいアイコンに。",
